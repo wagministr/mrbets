@@ -1,0 +1,34 @@
+{
+  "name": "mrbets",
+  "version": "1.0.0",
+  "description": "MrBets.ai - AI-powered football prediction platform",
+  "scripts": {
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:all": "concurrently \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "build:frontend": "cd frontend && npm run build",
+    "start:frontend": "cd frontend && npm run start",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f",
+    "docker:build": "docker-compose build",
+    "scan:fixtures": "docker exec backend python -m jobs.scan_fixtures"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/mrbets.git"
+  },
+  "keywords": [
+    "football",
+    "betting",
+    "predictions",
+    "AI",
+    "NextJS",
+    "FastAPI"
+  ],
+  "author": "",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+} 
