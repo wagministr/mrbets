@@ -68,6 +68,13 @@ jobs:
       - uses: actions/checkout@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
+        
+      - name: Set up Docker Compose
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker-compose-plugin
+          docker compose version
+        
       - name: Build backend
         uses: docker/build-push-action@v4
         with:
@@ -76,7 +83,8 @@ jobs:
           tags: mrbets/backend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          
       - name: Check docker-compose
         run: |
-          docker-compose config
+          docker compose config
           echo "✅ docker-compose configuration is valid" 
