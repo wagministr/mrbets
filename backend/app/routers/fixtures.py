@@ -1,116 +1,76 @@
-from fastapi import APIRouter, HTTPException, Query
-from typing import List, Optional
-import httpx
-import os
-from datetime import datetime, timedelta
+"""
+Fixtures router.
+"""
+
+from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter
+
+from app.models.common import ErrorResponse
+from app.models.fixtures import Fixture, FixtureList
 
 router = APIRouter()
 
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
-API_FOOTBALL_URL = "https://api-football-v1.p.rapidapi.com/v3"
 
-# Helper function to make API-Football requests
-async def api_football_request(endpoint: str, params: dict = {}):
-    headers = {
-        "X-RapidAPI-Key": API_FOOTBALL_KEY,
-        "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
-    }
-    
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{API_FOOTBALL_URL}/{endpoint}", 
-            headers=headers, 
-            params=params
-        )
-        
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"API-Football request failed: {response.text}"
-            )
-            
-        return response.json()
-
-@router.get("/")
+@router.get(
+    "/",
+    response_model=FixtureList,
+    responses={
+        200: {"description": "List of fixtures matching the criteria"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 async def get_fixtures(
-    date: Optional[str] = None,
-    league: Optional[int] = None,
-    team: Optional[int] = None,
-    days: int = Query(default=3, ge=1, le=7)
+    league_id: Optional[int] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
 ):
     """
-    Get upcoming fixtures with optional filtering
-    """
-    # Calculate date range if not provided
-    if not date:
-        today = datetime.now().strftime("%Y-%m-%d")
-        date = today
-    
-    # Build parameters
-    params = {"from": date, "to": (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")}
-    
-    if league:
-        params["league"] = league
-    if team:
-        params["team"] = team
-        
-    # Make API request
-    try:
-        result = await api_football_request("fixtures", params)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    Get fixtures list with optional filtering.
 
-@router.get("/{fixture_id}")
+    - **league_id**: Filter by league/competition ID
+    - **from_date**: Start date in ISO format (YYYY-MM-DD)
+    - **to_date**: End date in ISO format (YYYY-MM-DD)
+    """
+    # Placeholder response for now - will be connected to actual data later
+    fixture = Fixture(
+        fixture_id=1234,
+        league_id=39,
+        home_id=40,
+        away_id=41,
+        utc_kickoff=datetime.fromisoformat("2025-05-20T15:00:00+00:00"),
+        status="Not Started",
+        score_home=None,
+        score_away=None,
+    )
+
+    return FixtureList(fixtures=[fixture], count=1, has_more=False)
+
+
+@router.get(
+    "/{fixture_id}",
+    response_model=Fixture,
+    responses={
+        200: {"description": "Fixture details"},
+        404: {"model": ErrorResponse, "description": "Fixture not found"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
+)
 async def get_fixture_by_id(fixture_id: int):
     """
-    Get detailed information about a specific fixture
-    """
-    try:
-        result = await api_football_request("fixtures", {"id": fixture_id})
-        
-        if not result["response"]:
-            raise HTTPException(status_code=404, detail=f"Fixture with ID {fixture_id} not found")
-            
-        return result["response"][0]
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    Get fixture by ID.
 
-@router.get("/{fixture_id}/statistics")
-async def get_fixture_statistics(fixture_id: int):
+    - **fixture_id**: Unique identifier for the fixture
     """
-    Get statistics for a specific fixture
-    """
-    try:
-        result = await api_football_request("fixtures/statistics", {"fixture": fixture_id})
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/{fixture_id}/events")
-async def get_fixture_events(fixture_id: int):
-    """
-    Get events for a specific fixture (goals, cards, etc.)
-    """
-    try:
-        result = await api_football_request("fixtures/events", {"fixture": fixture_id})
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/{fixture_id}/odds")
-async def get_fixture_odds(fixture_id: int, bookmaker: Optional[int] = None):
-    """
-    Get betting odds for a specific fixture
-    """
-    params = {"fixture": fixture_id}
-    if bookmaker:
-        params["bookmaker"] = bookmaker
-        
-    try:
-        result = await api_football_request("odds", params)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
+    # Placeholder response for now - will be connected to actual data later
+    return Fixture(
+        fixture_id=fixture_id,
+        league_id=39,
+        home_id=40,
+        away_id=41,
+        utc_kickoff=datetime.fromisoformat("2025-05-20T15:00:00+00:00"),
+        status="Not Started",
+        score_home=None,
+        score_away=None,
+    )

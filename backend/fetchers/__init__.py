@@ -6,4 +6,4 @@ This package contains modules for fetching data from various sources:
 - Scraping (BBC, ESPN)
 - Social Media (Twitter, Telegram)
 - Video (YouTube + Whisper transcription)
-""" 
+"""
