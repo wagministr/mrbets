@@ -38,9 +38,9 @@ RAW_EVENTS_STREAM = "stream:raw_events"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EMBEDDING_MODEL = "text-embedding-3-large"
 
-# DeepL configuration
-DEEPL_KEY = os.getenv("DEEPL_KEY")
-DEEPL_URL = "https://api-free.deepl.com/v2/translate"
+# Yandex Translate configuration
+YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
+YANDEX_TRANSLATE_URL = "https://translate.api.cloud.yandex.net/translate/v2/translate"
 
 # Supabase configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -81,10 +81,10 @@ class PreProcessor:
             logger.warning(f"Language detection failed: {e}")
             return "en"  # Default to English if detection fails
 
-    async def translate_text(self, text: str, target_lang: str = "EN") -> str:
-        """Translate text to the target language using DeepL"""
-        if not DEEPL_KEY:
-            logger.warning("DeepL API key not set, skipping translation")
+    async def translate_text(self, text: str, target_lang: str = "en") -> str:
+        """Translate text to the target language using Yandex Translate"""
+        if not YANDEX_API_KEY:
+            logger.warning("Yandex API key not set, skipping translation")
             return text
 
         # Skip if already in target language
@@ -95,9 +95,16 @@ class PreProcessor:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    DEEPL_URL,
-                    headers={"Authorization": f"DeepL-Auth-Key {DEEPL_KEY}"},
-                    data={"text": text, "target_lang": target_lang},
+                    YANDEX_TRANSLATE_URL,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Api-Key {YANDEX_API_KEY}"
+                    },
+                    json={
+                        "texts": [text],
+                        "targetLanguageCode": target_lang,
+                        "folderId": os.getenv("YANDEX_FOLDER_ID", "")
+                    }
                 )
 
                 if response.status_code == 200:

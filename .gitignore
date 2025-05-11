@@ -32,6 +32,8 @@ __pycache__/
 *.so
 .Python
 backend/env/
+backend/.venv/
+.venv/
 backend/build/
 backend/develop-eggs/
 backend/dist/
@@ -62,3 +64,4 @@ backend/.pytest_cache/
 # Secrets and keys
 *.pem
 *.key 
+node_modules

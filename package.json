@@ -30,5 +30,8 @@
   "license": "UNLICENSED",
   "devDependencies": {
     "concurrently": "^8.2.2"
+  },
+  "dependencies": {
+    "@supabase/mcp-server-supabase": "^0.4.1"
   }
-} 
+}
