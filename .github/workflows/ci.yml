@@ -1,27 +1,16 @@
-name: MrBets CI/CD
+name: Backend CI/CD
 
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'backend/**'
   pull_request:
     branches: [ main ]
+    paths:
+      - 'backend/**'
 
 jobs:
-  lint-frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install dependencies
-        run: cd frontend && npm ci
-      - name: Run ESLint
-        run: cd frontend && npm run lint
-
   lint-backend:
     runs-on: ubuntu-latest
     steps:
@@ -45,33 +34,41 @@ jobs:
           black --check .
           isort --check-only --profile black .
 
-  build-frontend:
-    runs-on: ubuntu-latest
-    needs: lint-frontend
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install dependencies
-        run: cd frontend && npm ci
-      - name: Build
-        run: cd frontend && npm run build
-      # Deploy steps would be added here
-
-  build-backend:
+  test-backend:
     runs-on: ubuntu-latest
     needs: lint-backend
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov
+          pip install -r requirements.txt
+      - name: Run tests
+        run: |
+          cd backend
+          python -m pytest -v tests/
+      - name: Check FastAPI app starts
+        run: |
+          cd backend
+          python -c "from app.main import app; print('FastAPI app loaded successfully')"
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [lint-backend, test-backend]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
-      - name: Build and push
+      - name: Build backend
         uses: docker/build-push-action@v4
         with:
           context: ./backend
@@ -79,4 +76,7 @@ jobs:
           tags: mrbets/backend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      # Deploy steps would be added here 
+      - name: Check docker-compose
+        run: |
+          docker-compose config
+          echo "✅ docker-compose configuration is valid" 

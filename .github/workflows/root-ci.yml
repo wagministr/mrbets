@@ -1,0 +1,23 @@
+name: MrBets Root CI
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'frontend/**'
+      - 'backend/**'
+  pull_request:
+    branches: [ main ]
+    paths-ignore:
+      - 'frontend/**'
+      - 'backend/**'
+
+jobs:
+  validate-configs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Check docker-compose
+        run: |
+          docker-compose config
+          echo "✅ docker-compose configuration is valid" 
