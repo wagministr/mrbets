@@ -98,13 +98,13 @@ class PreProcessor:
                     YANDEX_TRANSLATE_URL,
                     headers={
                         "Content-Type": "application/json",
-                        "Authorization": f"Api-Key {YANDEX_API_KEY}"
+                        "Authorization": f"Api-Key {YANDEX_API_KEY}",
                     },
                     json={
                         "texts": [text],
                         "targetLanguageCode": target_lang,
-                        "folderId": os.getenv("YANDEX_FOLDER_ID", "")
-                    }
+                        "folderId": os.getenv("YANDEX_FOLDER_ID", ""),
+                    },
                 )
 
                 if response.status_code == 200:
@@ -253,6 +253,53 @@ class PreProcessor:
         except Exception as e:
             logger.error(f"Error processing event: {e}")
             return False
+
+    async def process(self, event_id: str, event_data: Dict[str, bytes]) -> bool:
+        """Process an event from the raw events stream"""
+        # This method is called by the worker
+        logger.info(f"Processing event {event_id}")
+        return await self.process_event(event_data)
+
+    async def run_consumer(self, group_name: str, consumer_name: str):
+        """Run as a consumer in a consumer group"""
+        try:
+            # Create consumer group if it doesn't exist
+            try:
+                self.redis_client.xgroup_create(
+                    RAW_EVENTS_STREAM, group_name, "0", mkstream=True
+                )
+                logger.info(f"Created consumer group {group_name}")
+            except redis.exceptions.ResponseError as e:
+                if "BUSYGROUP Consumer Group name already exists" in str(e):
+                    logger.info(f"Consumer group {group_name} already exists")
+                else:
+                    raise
+
+            logger.info(f"Starting consumer {consumer_name} in group {group_name}")
+
+            while True:
+                # Read new messages
+                streams = {RAW_EVENTS_STREAM: ">"}
+                response = self.redis_client.xreadgroup(
+                    group_name, consumer_name, streams, count=1, block=1000
+                )
+
+                if not response:
+                    continue  # No new messages
+
+                for stream, events in response:
+                    for event_id, event_data in events:
+                        success = await self.process(event_id, event_data)
+                        if success:
+                            # Acknowledge the message
+                            self.redis_client.xack(RAW_EVENTS_STREAM, group_name, event_id)
+                        else:
+                            # Message processing failed, will be retried by another consumer
+                            pass
+
+        except Exception as e:
+            logger.error(f"Error in consumer: {e}")
+            raise
 
 
 # Singleton instance
