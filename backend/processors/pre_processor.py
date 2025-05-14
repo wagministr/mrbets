@@ -265,9 +265,7 @@ class PreProcessor:
         try:
             # Create consumer group if it doesn't exist
             try:
-                self.redis_client.xgroup_create(
-                    RAW_EVENTS_STREAM, group_name, "0", mkstream=True
-                )
+                self.redis_client.xgroup_create(RAW_EVENTS_STREAM, group_name, "0", mkstream=True)
                 logger.info(f"Created consumer group {group_name}")
             except redis.exceptions.ResponseError as e:
                 if "BUSYGROUP Consumer Group name already exists" in str(e):

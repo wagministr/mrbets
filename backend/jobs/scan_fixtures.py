@@ -63,7 +63,8 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Configuration
-API_FOOTBALL_URL = "https://api-football-v1.p.rapidapi.com/v3"
+API_FOOTBALL_URL = "https://v3.football.api-sports.io"
+
 QUEUE_NAME = "queue:fixtures"
 LEAGUES_TO_MONITOR = [
     39,
@@ -73,46 +74,64 @@ LEAGUES_TO_MONITOR = [
     135,
     2,
     3,
+    255,
 ]  # Premier League, La Liga, Bundesliga, etc.
 
 
 async def fetch_fixtures(date_from, date_to):
-    """Fetch fixtures from API-Football"""
+    """Fetch fixtures from API-Football day-by-day using ?date=YYYY-MM-DD"""
+
     headers = {
-        "X-RapidAPI-Key": API_FOOTBALL_KEY,
-        "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com",
+        "x-apisports-key": API_FOOTBALL_KEY,
     }
 
-    # Format dates as YYYY-MM-DD
-    date_from_str = date_from.strftime("%Y-%m-%d")
-    date_to_str = date_to.strftime("%Y-%m-%d")
+    fixtures = []
 
-    logger.info(f"Fetching fixtures from {date_from_str} to {date_to_str}")
+    current_day = date_from
+    while current_day <= date_to:
+        date_str = current_day.strftime("%Y-%m-%d")
+        params = {
+            "date": date_str,
+            "timezone": "UTC"
+        }
 
-    params = {"from": date_from_str, "to": date_to_str, "timezone": "UTC"}
+        # Добавим фильтр по лигам, если нужно
+         if LEAGUES_TO_MONITOR:
+             leagues_param = ",".join(map(str, LEAGUES_TO_MONITOR))
+             params["league"] = leagues_param
 
-    # If leagues are specified, add them to the query
-    if LEAGUES_TO_MONITOR:
-        leagues_param = ",".join(map(str, LEAGUES_TO_MONITOR))
-        params["league"] = leagues_param
+        logger.info(f"Fetching fixtures for {date_str}...")
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                f"{API_FOOTBALL_URL}/fixtures", headers=headers, params=params
-            )
-
-            if response.status_code != 200:
-                logger.error(
-                    f"API request failed with status {response.status_code}: {response.text}"
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(
+                    f"{API_FOOTBALL_URL}/fixtures", headers=headers, params=params
                 )
-                return []
 
-            data = response.json()
-            return data.get("response", [])
-        except Exception as e:
-            logger.error(f"Error fetching fixtures: {e}")
-            return []
+                if response.status_code != 200:
+                    logger.error(f"API request failed for {date_str} — {response.status_code}: {response.text}")
+                    continue
+
+                data = response.json()
+                daily_fixtures = data.get("response", [])
+                
+                logger.info(f"Retrieved {len(daily_fixtures)} fixtures for {date_str}")
+
+                # Простой вывод в лог
+                for f in daily_fixtures:
+                    logger.info(f"{f['teams']['home']['name']} vs {f['teams']['away']['name']} — League ID {f['league']['id']} — {f['fixture']['date']}")
+
+                fixtures.extend(daily_fixtures)
+
+            except Exception as e:
+                logger.error(f"Error fetching fixtures for {date_str}: {e}")
+
+        # Перейдём к следующему дню
+        current_day += timedelta(days=1)
+
+
+    logger.info(f"✅ Всего собрано матчей: {len(fixtures)}")
+    return fixtures
 
 
 async def store_fixtures_in_supabase(fixtures):
@@ -143,7 +162,8 @@ async def store_fixtures_in_supabase(fixtures):
             # Upsert the fixture (insert if not exists, update if exists)
             supabase.table("fixtures").upsert(fixture_data).execute()
         except Exception as e:
-            logger.error(f"Error storing fixture {fixture_data['fixture_id']}: {e}")
+            logger.error(f"Error storing fixture {fixture_data['fixture_id']}: {type(e).__name__}: {e}")
+
 
 
 def add_fixtures_to_queue(fixtures):

@@ -74,5 +74,17 @@ services:
     volumes:
       - redis_data:/data
 
+  cron:
+    build: ./cron
+    volumes:
+      - ./backend:/app
+    environment:
+      - API_FOOTBALL_KEY=${API_FOOTBALL_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_SERVICE_KEY}
+    depends_on:
+      - redis
+
 volumes:
   redis_data: 
