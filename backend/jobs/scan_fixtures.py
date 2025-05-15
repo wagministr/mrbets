@@ -20,11 +20,13 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import httpx
 import redis
 from dotenv import load_dotenv
 from supabase import create_client
+from observer import log_event
 
 # Set up logging
 logging.basicConfig(
@@ -74,9 +76,13 @@ LEAGUES_TO_MONITOR = [
     135,
     2,
     3,
+    15,	
     255,
+    921,  
+    
 ]  # Premier League, La Liga, Bundesliga, etc.
 
+sys.path.append(str(Path(__file__).parent.parent))
 
 async def fetch_fixtures(date_from, date_to):
     """Fetch fixtures from API-Football day-by-day using ?date=YYYY-MM-DD"""
@@ -94,43 +100,64 @@ async def fetch_fixtures(date_from, date_to):
             "date": date_str,
             "timezone": "UTC"
         }
-
-        # Добавим фильтр по лигам, если нужно
-         if LEAGUES_TO_MONITOR:
-             leagues_param = ",".join(map(str, LEAGUES_TO_MONITOR))
-             params["league"] = leagues_param
-
+        #if LEAGUES_TO_MONITOR:
+        #    leagues_param = ",".join(map(str, LEAGUES_TO_MONITOR))
+        #    params["league"] = leagues_param
         logger.info(f"Fetching fixtures for {date_str}...")
-
+        log_event(
+            event_type="fixtures_scanned",
+            source="api-football",
+            status="started",
+            details=f"Fetching fixtures for {date_str}"
+        )
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
                     f"{API_FOOTBALL_URL}/fixtures", headers=headers, params=params
                 )
-
                 if response.status_code != 200:
                     logger.error(f"API request failed for {date_str} — {response.status_code}: {response.text}")
+                    log_event(
+                        event_type="fixtures_scanned",
+                        source="api-football",
+                        status="error",
+                        details=f"API request failed for {date_str}: {response.status_code}"
+                    )
                     continue
-
                 data = response.json()
                 daily_fixtures = data.get("response", [])
-                
                 logger.info(f"Retrieved {len(daily_fixtures)} fixtures for {date_str}")
-
-                # Простой вывод в лог
+                log_event(
+                    event_type="fixtures_scanned",
+                    source="api-football",
+                    status="success",
+                    details=f"Retrieved {len(daily_fixtures)} fixtures for {date_str}"
+                )
                 for f in daily_fixtures:
-                    logger.info(f"{f['teams']['home']['name']} vs {f['teams']['away']['name']} — League ID {f['league']['id']} — {f['fixture']['date']}")
-
+                    log_event(
+                        event_type="fixture_found",
+                        match_id=f["fixture"]["id"],
+                        source="api-football",
+                        status="info",
+                        details=f"{f['teams']['home']['name']} vs {f['teams']['away']['name']} — League ID {f['league']['id']} — {f['fixture']['date']}"
+                    )
                 fixtures.extend(daily_fixtures)
-
             except Exception as e:
                 logger.error(f"Error fetching fixtures for {date_str}: {e}")
-
-        # Перейдём к следующему дню
+                log_event(
+                    event_type="fixtures_scanned",
+                    source="api-football",
+                    status="error",
+                    details=f"Exception: {e}"
+                )
         current_day += timedelta(days=1)
-
-
     logger.info(f"✅ Всего собрано матчей: {len(fixtures)}")
+    log_event(
+        event_type="fixtures_scanned",
+        source="api-football",
+        status="finished",
+        details=f"Total fixtures collected: {len(fixtures)}"
+    )
     return fixtures
 
 
@@ -170,6 +197,11 @@ def add_fixtures_to_queue(fixtures):
     """Add fixture IDs to Redis queue for processing"""
     if not fixtures:
         logger.info("No fixtures to add to queue")
+        log_event(
+            event_type="fixture_queued",
+            status="skipped",
+            details="No fixtures to add to queue"
+        )
         return
 
     # Create a set of existing fixture IDs in the queue to avoid duplicates
@@ -194,8 +226,20 @@ def add_fixtures_to_queue(fixtures):
         # Add to Redis queue
         redis_client.lpush(QUEUE_NAME, fixture_id)
         added_count += 1
+        log_event(
+            event_type="fixture_queued",
+            match_id=fixture_id,
+            source="scan_fixtures",
+            status="success",
+            details="Match added to Redis queue"
+        )
 
     logger.info(f"Added {added_count} new fixtures to the queue")
+    log_event(
+        event_type="fixture_queued",
+        status="finished",
+        details=f"Added {added_count} new fixtures to the queue"
+    )
 
 
 async def main():
@@ -204,7 +248,7 @@ async def main():
 
     # Calculate date range (today + 3 days)
     today = datetime.now()
-    end_date = today + timedelta(days=3)
+    end_date = today + timedelta(days=1)
 
     # Fetch fixtures
     fixtures = await fetch_fixtures(today, end_date)
