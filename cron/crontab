@@ -1,1 +1,2 @@
-*/30 * * * * /bin/sh /scripts/run_scan.sh >> /var/log/cron.log 2>&1
+*/30 * * * * /bin/sh /app/run_scan.sh >> /var/log/cron.log 2>&1
+

@@ -75,7 +75,9 @@ services:
       - redis_data:/data
 
   cron:
-    build: ./cron
+    build:
+      context: .
+      dockerfile: cron/Dockerfile
     volumes:
       - ./backend:/app
     environment:
