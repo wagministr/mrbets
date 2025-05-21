@@ -41,6 +41,9 @@ services:
       - CRON_SECRET=${CRON_SECRET}
     depends_on:
       - redis
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
   worker:
     build: ./backend
@@ -66,6 +69,9 @@ services:
       - CRON_SECRET=${CRON_SECRET}
     depends_on:
       - redis
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
   redis:
     image: redis:7
@@ -78,8 +84,7 @@ services:
     build:
       context: .
       dockerfile: cron/Dockerfile
-    volumes:
-      - ./backend:/app
+  
     environment:
       - API_FOOTBALL_KEY=${API_FOOTBALL_KEY}
       - REDIS_URL=redis://redis:6379/0
@@ -87,6 +92,9 @@ services:
       - SUPABASE_KEY=${SUPABASE_SERVICE_KEY}
     depends_on:
       - redis
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
 volumes:
   redis_data: 

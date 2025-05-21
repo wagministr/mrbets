@@ -20,11 +20,11 @@ The project is evolving from a Next.js-only application with serverless function
 - **Automation**: Vercel Cron Jobs
 
 ### Planned Architecture
-- **Frontend**: Next.js 14 (unchanged)
+- **Frontend**: Next.js 14 (unchanged) + Telegram Bot 
 - **Backend**: FastAPI with microservices architecture
-- **Data Processing**: Redis Streams for distributed processing
-- **Vector Search**: Pinecone for semantic retrieval
-- **Storage**: Supabase Storage for raw data
+- **Data Processing**: Redis Streams for distributed processing. **Pre-processor (`pre_processor.py`) now handles translation, chunking, NER, entity linking (teams, players to Supabase IDs), OpenAI embeddings, and storage of processed documents to Supabase (`processed_documents` table) and chunk vectors to Pinecone.**
+- **Vector Search**: Pinecone for semantic retrieval. **The `pre_processor.py` now actively populates the Pinecone index.**
+- **Storage**: Supabase Storage for raw data (still relevant for original large files if needed, though `pre_processor` focuses on structured DB entries).
 - **Additional Data Sources**: News sites, social media, video content
 
 ---
@@ -33,10 +33,22 @@ The project is evolving from a Next.js-only application with serverless function
 
 ### 1. 🔄 **Fixtures Sync**
 - Uses `API-Football` to fetch upcoming matches from select leagues (e.g., Premier League, La Liga)
-- **Current**: Script: `/scripts/updateFixtures.ts`
-- **Planned**: Python service: `/backend/jobs/scan_fixtures.py`
+- **Current**: Script: `/scripts/updateFixtures.ts` (Legacy frontend script, to be deprecated)
+- **Implemented (Backend)**: Python service: `backend/jobs/scan_fixtures.py`
+  - Fetches upcoming fixtures from API-Football for a configurable list of leagues and a defined forward window (e.g., 30 days).
+  - Stores detailed fixture data in Supabase `fixtures` table (includes IDs, teams, event date, status, scores, and full API response).
+  - Adds new `fixture_id`s to a Redis queue (`queue:fixtures`) for further processing.
+  - Employs a Redis set for de-duplication to prevent re-processing recently scanned fixtures within a TTL (e.g., 24 hours).
+  - Supports a test mode for fetching data from a past season to aid development during off-seasons.
 - Stores match data into `Supabase.fixtures`
 - Triggered via cron job
+
+### 1.A. 🧑‍🤝‍🧑 **Metadata Sync (Teams & Players)**
+- **Implemented (Backend)**: Python service `backend/fetchers/metadata_fetcher.py`
+  - Fetches comprehensive data for teams (including name, country, venue details like name, city, capacity, image) and players (name, nationality, age, height, photo, and season-specific stats like appearances, goals, rating if provided by API) from API-Football.
+  - Populates/updates the Supabase tables `teams` and `players`.
+  - Operates on a configurable list of leagues and a specified season to ensure contextual relevance of player statistics.
+  - This script is typically run on-demand or less frequently than fixture scanning, to build and maintain a local cache of team/player metadata.
 
 ### 2. 🧠 **AI Prediction Generation**
 - Each match is processed by:
@@ -47,7 +59,7 @@ The project is evolving from a Next.js-only application with serverless function
     - `CHAIN OF THOUGHT`
     - `FINAL PREDICTION`
     - `VALUE BETS`
-- **Current**: Script: `/scripts/generatePrediction.ts`
+
 - **Planned**: Pipeline: 
   - Data collection via various fetchers
   - Pre-processing via `/backend/processors/pre_processor.py`
@@ -56,11 +68,7 @@ The project is evolving from a Next.js-only application with serverless function
 - All results are stored in `Supabase.ai_predictions`
 
 ### 3. 📅 **Automated Processing**
-- **Current**: Nightly cron job (4:00 AM UTC) runs two steps:
-  - `run-update.js` → Updates fixtures
-  - `run-all-predictions.js` → Generates predictions for unprocessed matches
-  - Cron route: `/api/cron/daily-update`
-  - Deployment: Vercel with `vercel.json` cron support
+
 - **Planned**: Continuous processing:
   - Data collection every 30 minutes via cron
   - Redis Streams for distributed processing
@@ -99,7 +107,7 @@ The project is evolving from a Next.js-only application with serverless function
 - `status`: text
 - `score_home`: integer
 - `score_away`: integer
-- `last_updated`: timestamp
+- `last_updated`: timestamp 
 
 #### `ai_predictions`
 - `id`: uuid (primary key)
@@ -111,8 +119,6 @@ The project is evolving from a Next.js-only application with serverless function
 - `model_version`: text
 - `generated_at`: timestamp
 - `stale`: boolean (default: false)
-
-### Planned Additional Tables
 
 #### `raw_events`
 - `id`: uuid (primary key)
@@ -136,33 +142,47 @@ The project is evolving from a Next.js-only application with serverless function
 ### Current Integrations
 
 #### ✅ API-Football
-- Used for: Fixtures, live odds, team data, predictions
-- Called via `lib/apiFootball.ts`
+- Used for: Fixtures, live odds, team data, predictions, league standings, player statistics, venue information.
+- Called via `lib/apiFootball.ts` (Legacy Frontend) and backend Python scripts (`backend/jobs/scan_fixtures.py`, `backend/fetchers/metadata_fetcher.py`, `backend/fetchers/rest_fetcher.py`).
 - Rate-limited API with key-based access
 
-#### ✅ OpenAI
+#### ✅ The Odds API
+- Used for: Fetching pre-match and live odds from multiple bookmakers.
+- Called via: `backend/fetchers/odds_fetcher.py`
+- Rate-limited API with key-based access (`ODDS_API_KEY`).
+- Integrated with Redis Streams for `raw_events` and Supabase Storage for snapshots.
+
+#### ✅ Scraper Fetcher (BBC Sport RSS)
+- Use: Scraping news articles from BBC Sport RSS feeds.
+- Called via: `backend/fetchers/scraper_fetcher.py`
+- Uses `httpx`, `BeautifulSoup4`, `feedparser` for fetching and parsing HTML/RSS.
+- Uses `spacy` for Named Entity Recognition (NER) from article text.
+- Extracts article title, full text, images, and entities.
+- Pushes structured data to Redis Streams (`raw_events`) and saves raw text to Supabase Storage.
+
+### Planned Integrations
+
+#### ⏳ OpenAI
 - Used for: Text generation (reasoning, summary, betting logic)
 - Model: `o4-mini`
 - Called via `generatePrediction.ts` → OpenAI Chat Completion endpoint
 - Responses are split into 3 sections and stored
 
-### Planned Integrations
-
 #### ⏳ OpenAI Embeddings
 - Use: Vectorizing text for semantic search
-- Model: `text-embedding-3-large`
-- Will be called via: `/backend/processors/pre_processor.py`
+- Model: `text-embedding-3-small` (as implemented in `pre_processor.py`)
+- Will be called via: `/backend/processors/pre_processor.py` (**Implemented**)
 
 #### ⏳ Pinecone
 - Use: Vector database for similar document retrieval
-- Will store all processed text embeddings
+- Will store all processed text embeddings. **Populated by `pre_processor.py`.**
 - Will be queried for context retrieval for each match
 
 #### ⏳ BeautifulSoup + Requests
 - Use: Scraping news sites and sports blogs
 - Will extract clean text from HTML
 
-#### ⏳ DeepL API
+#### ⏳ Yandex Cloud API
 - Use: Translation services for non-English content
 - Will ensure all analysis happens on English text
 
@@ -177,22 +197,24 @@ The project is evolving from a Next.js-only application with serverless function
 
 ---
 
-## 📊 Data Flow Pipeline (Planned)
+## 📊 Data Flow Pipeline 
 
 ```
 [CRON] → scan_fixtures.py → redis:queue:fixtures (LIST) → worker_manager
                                        │ POP
                                        ▼
-                   «data-collector workflow» (fan-out 5 fetcher tasks)
+                   «data-collector workflow» (fan-out fetcher tasks)
 ┌─────────────────────────────────────────────────────────────────────┐
 │ rest_fetcher.py (API-Football)       → raw_events (STREAM)          │
+│ odds_fetcher.py (The Odds API)       → raw_events (STREAM)          │
 │ scraper_fetcher.py (BBC/ESPN)        → raw_events (STREAM)          │
 │ twitter_fetcher.py (filtered stream) → raw_events (STREAM)          │
 │ telegram_fetcher.py (bot getUpdates) → raw_events (STREAM)          │
 │ youtube_fetcher.py (yt-dlp+Whisper)  → raw_events (STREAM)          │
 └─────────────────────────────────────────────────────────────────────┘
                      ▼ consumer-group:pre_processor (parallel workers)
-     translate → split_chunks → reliability_score → embeddings → Storage/Pinecone/Postgres
+-    translate → split_chunks → reliability_score → embeddings → Storage/Pinecone/Postgres
++    (pre_processor.py: translate → chunk → NER → link entities (Supabase) → embeddings (OpenAI) → store (Supabase `processed_documents`, Pinecone vectors))
                      ▼
            retriever_builder.py (sql filter + pinecone topK + dedup)
                      ▼
@@ -208,13 +230,7 @@ This pipeline will run automatically every 30 minutes, constantly updating the d
 ## 🧪 Development Environment
 
 ### Current Environment
-- Project is developed on Windows 11 + PowerShell
-- Local script execution via `ts-node`
-- Supabase MCP enabled for Cursor integration
-- `.env` stores all API keys & model info
-
-### Planned Environment
-- Development on Windows 11 with WSL 2
+- Project is developed on Windows 11 + Linux WSL
 - Docker + docker-compose for full system simulation
 - Backend development in Python 3.11
 - Frontend continues with Next.js/TypeScript
@@ -225,33 +241,101 @@ This pipeline will run automatically every 30 minutes, constantly updating the d
 ## 💻 Repository Structure (Planned)
 
 ```
-mrbets/                         # Repository name
-├── frontend/                    # Current Next.js project
-│   ├── src/                     # Frontend source code
-│   ├── public/                  # Static files 
-│   ├── package.json             # Frontend dependencies
-│   └── ...                      # Other Next.js files
-│
-├── backend/                     # New FastAPI backend
-│   ├── app/                     # Main FastAPI code
-│   │   ├── main.py              # FastAPI entry point
-│   │   ├── routers/             # API routes
-│   │   └── models/              # Data schemas
-│   ├── jobs/                    # Scripts for cron tasks
+mrbets/                         # Repository root
+├── backend/                    # FastAPI backend
+│   ├── app/                    # Main FastAPI code
+│   │   ├── main.py
+│   │   ├── models/
+│   │   │   ├── __init__.py
+│   │   │   ├── common.py
+│   │   │   ├── fixture.py
+│   │   │   ├── fixtures.py
+│   │   │   ├── prediction.py
+│   │   │   └── predictions.py
+│   │   ├── routers/
+│   │   │   ├── __init__.py
+│   │   │   ├── fixtures.py
+│   │   │   └── predictions.py
+│   │   └── utils/
+│   │       ├── __init__.py
+│   │       ├── config.py
+│   │       ├── exceptions.py
+│   │       └── logger.py
+│   ├── fetchers/
+│   │   ├── __init__.py
+│   │   ├── metadata_fetcher.py
+│   │   ├── rest_fetcher.py
+│   │   ├── odds_fetcher.py
+│   │   └── scraper_fetcher.py
+│   ├── jobs/
 │   │   ├── scan_fixtures.py
 │   │   └── worker.py
-│   ├── fetchers/                # Data collection microservices
-│   ├── processors/              # Data processors
+│   ├── processors/
+│   │   ├── __init__.py
+│   │   └── pre_processor.py
 │   ├── requirements.txt
-│   └── Dockerfile
+│   ├── requirements-dev.txt
+│   ├── Dockerfile
+│   ├── env.example
+│   ├── .gitignore
+│   ├── .flake8
+│   ├── pyproject.toml
+│   ├── observer.py
+│   ├── check_fixtures.py
+│   ├── test_services.py
+│   └── tests/
 │
-├── docker-compose.yml           # For running the entire system
-├── .github/                     # GitHub Actions
-├── BACKEND.md                   # Backend documentation
-└── CONTEXT.md                   # This file
-```
-
+├── frontend/                   # Next.js 14 frontend
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── globals.css
+│   │   │   ├── layout.tsx
+│   │   │   └── page.tsx
+│   ├── public/
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── Dockerfile
+│   ├── .eslintrc.json
+│   ├── next-env.d.ts
+│   ├── next.config.js
+│   ├── postcss.config.js
+│   ├── tailwind.config.js
+│   ├── tsconfig.json
+│   └── .vscode/
+│
+├── .github/
+│   └── workflows/
+│       ├── ci.yml
+│       ├── root-ci.yml
+│       └── frontend-lint.yml
+├── cron/
+│   ├── crontab
+│   ├── run_scan.sh
+│   └── Dockerfile
+├── logs/
+│   └── observer.log
+├── scripts/
+├── node_modules/
+├── package.json
+├── package-lock.json
+├── docker-compose.yml
+├── .gitignore
+├── env.example
+├── .flake8
+├── README.md
+├── CONTEXT.md
+└── BACKEND.md
 ---
+
+Only basic fetcher and processor modules are implemented in backend/; other directories exist but are currently empty.
+Specifically, `rest_fetcher.py`, `odds_fetcher.py`, and `scraper_fetcher.py` are now available.
+The frontend/ is a Next.js 14 scaffold without business logic.
+The monitoring/ directory is missing.
+The scripts/ directory is empty or contains only stubs.
+The cron/ directory contains a crontab and helper scripts.
+.github/workflows/ provides CI/CD for both frontend and backend.
+The logs/ directory is used for backend logs.
+
 
 ## 🔜 Project Timeline (May 9 → August 9)
 
@@ -317,25 +401,26 @@ Keep it updated when functionality evolves.
 mrbets/
 ├── frontend/            # Next.js frontend
 │   ├── src/             # React компоненты и страницы
-│   ├── public/          # Статические файлы
-│   └── package.json     # Frontend зависимости
-│
-├── backend/             # FastAPI backend
-│   ├── app/             # FastAPI код
-│   │   ├── main.py      # Основная точка входа
-│   │   ├── routers/     # API маршруты
-│   │   ├── models/      # Схемы данных 
-│   │   └── utils/       # Утилиты
-│   ├── jobs/            # Cron задачи
-│   │   ├── scan_fixtures.py
-│   │   └── worker.py
-│   ├── fetchers/        # Сборщики данных
-│   ├── processors/      # Обработчики данных
-│   └── requirements.txt # Backend зависимости
-│
-├── monitoring/          # Prometheus и Grafana
-├── docker-compose.yml   # Запуск всей системы
-└── .env.example         # Пример переменных окружения
+│   │   ├── app/
+│   │   │   ├── globals.css
+│   │   │   ├── layout.tsx
+│   │   │   └── page.tsx
+│   │   ├── public/          # Статические файлы
+│   │   └── package.json     # Frontend зависимости
+│   ├── backend/             # FastAPI backend
+│   │   ├── app/             # FastAPI код
+│   │   │   ├── main.py      # Основная точка входа
+│   │   │   ├── routers/     # API маршруты
+│   │   │   ├── models/      # Схемы данных 
+│   │   │   └── utils/       # Утилиты
+│   │   ├── jobs/            # Cron задачи
+│   │   │   ├── scan_fixtures.py
+│   │   │   └── worker.py
+│   │   ├── fetchers/        # Сборщики данных
+│   │   └── requirements.txt # Backend зависимости
+│   ├── monitoring/          # Prometheus и Grafana
+│   ├── docker-compose.yml   # Запуск всей системы
+│   └── .env.example         # Пример переменных окружения
 ```
 
 ### 2. Структура бэкенда (FastAPI)
@@ -343,7 +428,8 @@ mrbets/
 - **FastAPI App**: REST API с эндпоинтами для получения данных о матчах и прогнозах
 - **Fixture Router**: `/fixtures` эндпоинты для работы с матчами
 - **Worker Process**: Обработка задач из очереди Redis
-- **Scan Fixtures Job**: Периодическое сканирование новых матчей
+- **Scan Fixtures Job**: Периодическое сканирование новых матчей (`backend/jobs/scan_fixtures.py`)
+- **Fetcher Modules**: Scripts like `backend/fetchers/metadata_fetcher.py` (teams, players), `backend/fetchers/rest_fetcher.py` (API-Football fixture details), `backend/fetchers/scraper_fetcher.py` (news), and `backend/fetchers/odds_fetcher.py` (The Odds API) for data collection.
 
 ### 3. Компоненты мониторинга
 
@@ -361,65 +447,3 @@ mrbets/
   - grafana
 
 Это изменение упрощает локальную разработку и улучшает масштабируемость системы для поддержки большего количества матчей и более сложной логики анализа.
-
-## 📝 Update: 2025-05-10 - Настройка Монорепозитория
-
-Сегодня были реализованы следующие улучшения для поддержки монорепозитория:
-
-### 1. Корневой package.json с управлением скриптами
-
-Создан корневой `package.json` с набором скриптов для управления обоими проектами:
-
-```json
-{
-  "name": "mrbets",
-  "version": "1.0.0",
-  "scripts": {
-    "dev:frontend": "cd frontend && npm run dev",
-    "dev:backend": "cd backend && uvicorn app.main:app --reload",
-    "dev:all": "concurrently \"npm run dev:frontend\" \"npm run dev:backend\"",
-    "build:frontend": "cd frontend && npm run build",
-    "start:frontend": "cd frontend && npm run start",
-    "docker:up": "docker-compose up -d",
-    "docker:down": "docker-compose down",
-    "check-monorepo": "bash ./scripts/check-monorepo.sh"
-  }
-}
-```
-
-### 2. Обновленный .gitignore для монорепозитория
-
-Расширен файл `.gitignore` для корректной работы с Python и Node.js:
-
-```
-# Python
-__pycache__/
-*.py[cod]
-/backend/.venv/
-/backend/*.egg-info/
-/backend/.pytest_cache/
-
-# Node.js
-/node_modules/
-/frontend/node_modules/
-/frontend/.next/
-
-# Логи и временные файлы
-*.log
-.docker/
-dump.rdb
-```
-
-### 3. Диагностический скрипт для проверки структуры
-
-Создан bash-скрипт `scripts/check-monorepo.sh` для проверки структуры монорепозитория:
-- Проверяет наличие всех критических файлов
-- Валидирует скрипты в package.json
-- Проверяет переменные окружения
-- Выводит цветное резюме состояния проекта
-
-### 4. Обновленная документация
-
-Обновлен `README.md` с инструкциями по установке и запуску, а также описанием новой структуры монорепозитория.
-
-Эти изменения обеспечивают более удобную разработку и управление проектом с разделением фронтенда и бэкенда.

@@ -6,6 +6,10 @@ RUN apt-get update && apt-get install -y cron
 # Создание рабочей директории
 WORKDIR /app
 
+# Копируем requirements.txt и устанавливаем зависимости
+COPY backend/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
 # Копируем скрипт scan_fixtures из внешней папки
 COPY backend/jobs/scan_fixtures.py /app/scan_fixtures.py
 
