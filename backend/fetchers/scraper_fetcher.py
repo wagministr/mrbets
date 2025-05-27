@@ -42,7 +42,7 @@ MAX_ARTICLES_PER_FEED = 3 # Limit the number of articles processed per feed for 
 
 # --- Environment Variables & Configuration ---
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-REDIS_STREAM_NAME = "raw_events"
+REDIS_STREAM_NAME = "stream:raw_events"
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY") # Use service key for backend operations
 SUPABASE_BUCKET_NAME = os.getenv("SUPABASE_BUCKET_NAME", "mrbets-raw") # Or a more specific one like 'bbc-articles'
@@ -82,6 +82,37 @@ except Exception as e:
     logger.error(f"Failed to initialize Supabase client: {e}")
     supabase = None
 
+# --- Deduplication Helpers ---
+PROCESSED_URL_KEY_PREFIX = "processed_url:"
+DEFAULT_URL_TTL = 7 * 24 * 60 * 60  # 7 days in seconds
+
+async def is_url_processed(url: str) -> bool:
+    """Checks if a URL has already been processed based on Redis cache."""
+    if not redis_client:
+        logger.warning("Redis client not available, cannot check if URL is processed.")
+        return False
+    try:
+        key = f"{PROCESSED_URL_KEY_PREFIX}{url}"
+        exists = await redis_client.exists(key)
+        if exists:
+            logger.info(f"URL already processed (found in Redis): {url}")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Redis error checking if URL {url} is processed: {e}")
+        return False # Treat as not processed in case of error to avoid missing data
+
+async def mark_url_as_processed(url: str, ttl: int = DEFAULT_URL_TTL):
+    """Marks a URL as processed in Redis with a TTL."""
+    if not redis_client:
+        logger.warning("Redis client not available, cannot mark URL as processed.")
+        return
+    try:
+        key = f"{PROCESSED_URL_KEY_PREFIX}{url}"
+        await redis_client.setex(key, ttl, "1")
+        logger.info(f"Marked URL as processed in Redis: {url} with TTL {ttl}s")
+    except Exception as e:
+        logger.error(f"Redis error marking URL {url} as processed: {e}")
 
 async def fetch_article_html(url: str) -> str | None:
     """Fetches the HTML content of a given URL."""
@@ -198,8 +229,12 @@ async def fetch_and_parse_rss_feed(feed_url: str, feed_name: str):
             title = entry.get("title", "N/A")
             link = entry.get("link", "N/A")
             summary = entry.get("summary") # Might contain HTML
-            published_parsed = entry.get("published_parsed")
             
+            # Deduplication check
+            if await is_url_processed(link):
+                continue
+
+            published_parsed = entry.get("published_parsed")
             article_timestamp_iso = None
             if published_parsed:
                 # Convert struct_time to datetime object, then to ISO 8601 string
@@ -276,61 +311,52 @@ async def fetch_and_parse_rss_feed(feed_url: str, feed_name: str):
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
-            # 5. Put into Redis Stream
+            # 5. Put into Redis Stream (этот блок был выше, теперь логика объединена)
+            event_successfully_stored_to_redis = False # Флаг для отслеживания успеха
             if redis_client:
                 try:
-                    # Use entry.id or generate a unique ID for the stream message
-                    message_id = entry.get("id", link) # Use link as a fallback for message ID
+                    # event_data уже сформирован ранее и содержит все необходимое, включая payload
+                    # message_id = entry.get("id", link) # entry.id может быть полезнее для уникальности чем link, если доступен
                     await redis_client.xadd(REDIS_STREAM_NAME, {"data": json.dumps(event_data)}, id="*")
-                    logger.info(f"Successfully added event for '{title}' to Redis stream '{REDIS_STREAM_NAME}'.")
+                    logger.info(f"Successfully added event for '{article_title}' to Redis stream '{REDIS_STREAM_NAME}'.")
+                    event_successfully_stored_to_redis = True
                 except Exception as e:
-                    logger.error(f"Failed to add event for '{title}' to Redis: {e}")
-            
-            # 6. Save to Supabase Storage
+                    logger.error(f"Failed to add event for '{article_title}' to Redis: {e}")
+            else:
+                logger.warning("Redis client not available, cannot send event to Redis.")
+
+
+            # 6. Save to Supabase Storage (этот блок остается как есть, но убедимся, что он после Redis)
             if supabase and (match_id or True): # Saving even if no match_id for now
                 # Create a unique name, e.g., based on article ID or hash
                 # Sanitize link to be a valid path component
                 sanitized_link_for_path = link.split("/")[-1] if link.split("/")[-1] else link.split("/")[-2]
                 sanitized_link_for_path = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in sanitized_link_for_path)
                 
-                # Use a generic folder if match_id is None, or specific if available.
                 storage_folder = f"match_{match_id}" if match_id else "general_bbc_news"
                 file_name = f"bbc_{sanitized_link_for_path}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.txt"
                 full_storage_path = f"raw/{storage_folder}/{file_name}"
                 
                 try:
-                    # Storing the parsed full_text. Could also store raw HTML.
                     text_content_bytes = full_text.encode('utf-8')
-
-                    # Check if bucket exists (optional, but good for first run)
-                    # try:
-                    #     supabase.storage.get_bucket(SUPABASE_BUCKET_NAME)
-                    # except Exception: # More specific exception handling for "bucket not found" is better
-                    #     logger.info(f"Bucket {SUPABASE_BUCKET_NAME} not found, attempting to create.")
-                    #     supabase.storage.create_bucket(SUPABASE_BUCKET_NAME, public=False)
-
-
                     await asyncio.to_thread(
                         supabase.storage.from_(SUPABASE_BUCKET_NAME).upload,
                         path=full_storage_path,
                         file=text_content_bytes,
-                        file_options={"content-type": "text/plain;charset=utf-8", "upsert": "true"} # Upsert if file exists
+                        file_options={"content-type": "text/plain;charset=utf-8", "upsert": "true"}
                     )
-                    logger.info(f"Successfully saved article '{title}' to Supabase Storage: {full_storage_path}")
+                    logger.info(f"Successfully saved article '{article_title}' to Supabase Storage: {full_storage_path}")
                 except Exception as e:
-                    # Catching Supabase specific errors would be better if known
-                    logger.error(f"Failed to save article '{title}' to Supabase Storage: {e}. Path: {full_storage_path}")
-                    # Log the Supabase error details if available and helpful
+                    logger.error(f"Failed to save article '{article_title}' to Supabase Storage: {e}. Path: {full_storage_path}")
                     if hasattr(e, 'message'): logger.error(f"Supabase error details: {e.message}")
-
-
-            # 7. TODO: Translate non-English text (DeepL) - BBC is usually English, but good to have a placeholder
-            # if DEEPL_API_KEY and needs_translation(full_text):
-            #    translated_text = await translate_with_deepl(full_text, DEEPL_API_KEY)
-            #    event_data["payload"]["full_text_translated"] = translated_text
-            #    event_data["payload"]["original_language"] = detected_language(full_text) # Placeholder
             
-            processed_count += 1 # Increment after successful processing of an entry
+            # Mark URL as processed and increment count only if successfully stored to Redis
+            if event_successfully_stored_to_redis:
+                await mark_url_as_processed(link) 
+                processed_count += 1 
+            else:
+                logger.error(f"Failed to store event for article {link} from feed {feed_name} to Redis. URL will not be marked as processed.")
+
             await asyncio.sleep(1) # Small delay to be polite to the server
 
     except httpx.HTTPStatusError as e:

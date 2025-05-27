@@ -120,10 +120,10 @@ DAYS_FORWARD = 30 # Fetch fixtures for today and next 29 days (total 30 days)
 REQUEST_DELAY_SECONDS = 1 # Delay between API calls to respect rate limits
 
 # Configuration for fetching past season data for testing
-TEST_MODE_PAST_SEASON = False # Set to False to revert to current season fetching
+TEST_MODE_PAST_SEASON = True # Set to False to revert to current season fetching
 TEST_SEASON = "2023" # Season year (e.g., 2023 for 2023/2024 season)
 TEST_DATE_FROM = f"{TEST_SEASON}-08-01" # Example: August 2023
-TEST_DATE_TO = f"{TEST_SEASON}-08-31"   # Example: August 2023
+TEST_DATE_TO = f"{TEST_SEASON}-08-05"   # Example: August 2023
 
 async def fetch_fixtures_for_league_range(league_id: int, date_from: str, date_to: str, season: str, client: httpx.AsyncClient):
     """Fetch fixtures for a league within a date range (from-to) for a specific season."""

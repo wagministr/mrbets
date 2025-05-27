@@ -23,9 +23,13 @@ import os
 import signal
 import sys
 from datetime import datetime
+from typing import Optional
 
 import redis
 from dotenv import load_dotenv
+
+# NEW IMPORT: Add scraper_fetcher
+from fetchers.scraper_fetcher import main_scraper_task as scraper_main_task
 
 # Set up logging
 logging.basicConfig(
@@ -89,39 +93,34 @@ def setup_streams():
     return True
 
 
-async def process_fixture(fixture_id):
-    """Process a fixture from the queue - placeholder implementation"""
-    logger.info(f"Processing fixture: {fixture_id}")
+async def process_fixture(fixture_id_str: str):
+    """Process a fixture from the queue by triggering scraper fetcher"""
+    logger.info(f"Processing fixture: {fixture_id_str} - by triggering scraper_fetcher")
 
     try:
-        # Here we would call the different fetchers to collect data
-        # For demonstration, we'll simulate data collection with dummy data
+        current_fixture_id: Optional[int] = None
+        if fixture_id_str:
+            try:
+                current_fixture_id = int(fixture_id_str)
+            except ValueError:
+                logger.warning(f"Could not convert fixture_id_str '{fixture_id_str}' to int. Proceeding without specific fixture_id for scraper.")
 
-        # Simulate a REST API fetcher
-        rest_data = {
-            "match_id": fixture_id,
-            "source": "api_football",
-            "payload": json.dumps({"stats": {"possession": {"home": 55, "away": 45}}}),
-            "timestamp": int(datetime.now().timestamp()),
-        }
+        # Call the main task of scraper_fetcher, passing the specific fixture_id
+        logger.info(f"Calling scraper_fetcher for fixture_id: {current_fixture_id} (scraper will run its general scan but pass this ID)")
+        # Pass the integer fixture_id to the scraper task
+        await scraper_main_task(fixture_id=current_fixture_id)
+        logger.info(f"scraper_fetcher task completed for fixture_id: {current_fixture_id}")
+        
+        # TODO: In the future, trigger other fetchers like rest_fetcher, odds_fetcher for this specific fixture_id
+        # Example: await rest_fetcher.fetch_and_store_data(current_fixture_id)
+        #          await odds_fetcher.fetch_and_store_data(current_fixture_id)
 
-        # Add data to raw events stream
-        redis_client.xadd(RAW_EVENTS_STREAM, rest_data)
-        logger.info(f"Added API data to {RAW_EVENTS_STREAM} for fixture {fixture_id}")
-
-        # Simulate delay for data processing
-        await asyncio.sleep(1)
-
-        # In a real implementation, we would launch multiple fetchers:
-        # - REST fetcher (API-Football)
-        # - Scraper fetcher (BBC, ESPN)
-        # - Twitter fetcher
-        # - Telegram fetcher
-        # - YouTube fetcher (with Whisper transcription)
-
+        # Simulate some base processing time or await actual fetcher completion
+        # The scraper_main_task is awaited, so its own delays are handled there.
+        
         return True
     except Exception as e:
-        logger.error(f"Error processing fixture {fixture_id}: {e}")
+        logger.error(f"Error processing fixture {fixture_id_str} by calling scraper: {e}", exc_info=True)
         return False
 
 
@@ -156,35 +155,38 @@ async def process_raw_event(event_id, event_data):
 async def consume_fixtures_queue():
     """Consume fixtures from the Redis queue"""
     try:
-        # Check if there are items in the queue
-        queue_length = redis_client.llen(FIXTURES_QUEUE)
+        queue_length = await asyncio.to_thread(redis_client.llen, FIXTURES_QUEUE)
+        logger.info(f"Checking '{FIXTURES_QUEUE}', current length: {queue_length}") # DEBUG LOG
 
         if queue_length == 0:
-            logger.debug("No fixtures in queue")
+            logger.debug(f"No fixtures in '{FIXTURES_QUEUE}'. Skipping pop attempt.")
             return False
 
         # Get a fixture from the queue (blocking pop with timeout)
-        result = redis_client.blpop(FIXTURES_QUEUE, timeout=1)
+        # redis-py's blpop is synchronous, so run it in a thread to avoid blocking asyncio loop
+        result = await asyncio.to_thread(redis_client.blpop, FIXTURES_QUEUE, timeout=1)
+        logger.info(f"blpop result from '{FIXTURES_QUEUE}': {result}") # DEBUG LOG
 
         if not result:
+            logger.info(f"'{FIXTURES_QUEUE}' blpop returned None (timeout or empty).") # DEBUG LOG
             return False
 
         _, fixture_id_bytes = result
         fixture_id = fixture_id_bytes.decode("utf-8")
 
-        logger.info(f"Got fixture {fixture_id} from queue")
+        logger.info(f"Got fixture {fixture_id} from queue '{FIXTURES_QUEUE}'")
 
         # Process the fixture
         success = await process_fixture(fixture_id)
 
         # If processing failed, we could requeue it
         if not success:
-            logger.warning(f"Failed to process fixture {fixture_id}, requeuing...")
-            redis_client.rpush(FIXTURES_QUEUE, fixture_id)
+            logger.warning(f"Failed to process fixture {fixture_id}, requeuing to '{FIXTURES_QUEUE}'...")
+            await asyncio.to_thread(redis_client.rpush, FIXTURES_QUEUE, fixture_id)
 
         return True
     except Exception as e:
-        logger.error(f"Error consuming from fixtures queue: {e}")
+        logger.error(f"Error consuming from fixtures queue '{FIXTURES_QUEUE}': {e}", exc_info=True)
         return False
 
 
@@ -228,20 +230,28 @@ async def consume_raw_events_stream():
 
 async def worker_loop():
     """Main worker loop"""
+    logger.info("Worker loop started.") # DEBUG LOG
     while running:
         try:
-            # Process fixtures queue
+            logger.info("Worker loop iteration: trying to consume fixtures.") # DEBUG LOG
             fixtures_processed = await consume_fixtures_queue()
+            logger.info(f"Worker loop iteration: fixtures_processed = {fixtures_processed}") # DEBUG LOG
 
-            # Process raw events stream
+            logger.info("Worker loop iteration: trying to consume raw events.") # DEBUG LOG
             events_processed = await consume_raw_events_stream()
+            logger.info(f"Worker loop iteration: events_processed = {events_processed}") # DEBUG LOG
 
             # If nothing was processed, sleep a bit to avoid CPU spinning
             if not fixtures_processed and not events_processed:
+                logger.info(f"Nothing processed, sleeping for {POLLING_INTERVAL} seconds.") # DEBUG LOG
                 await asyncio.sleep(POLLING_INTERVAL)
+            else:
+                logger.info("Something was processed, looping again immediately.") # DEBUG LOG
+                await asyncio.sleep(0.1) # Short sleep to yield control
         except Exception as e:
-            logger.error(f"Error in worker loop: {e}")
+            logger.error(f"Error in worker loop: {e}", exc_info=True)
             await asyncio.sleep(POLLING_INTERVAL)
+    logger.info("Worker loop stopped because 'running' is False.") # DEBUG LOG
 
 
 async def main():
