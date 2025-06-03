@@ -8,3 +8,14 @@ This package contains modules for processing raw data:
 - LLM reasoning
 - Result writing
 """
+
+# Export new pipeline components
+from .retriever_builder import MatchContextRetriever
+from .llm_reasoner import LLMReasoner
+from .llm_content_analyzer import LLMContentAnalyzer
+
+__all__ = [
+    "MatchContextRetriever",
+    "LLMReasoner", 
+    "LLMContentAnalyzer"
+]

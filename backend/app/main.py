@@ -12,7 +12,7 @@ load_dotenv()
 
 # Now import app modules that require environment variables
 from app.models.common import HealthResponse, ReadinessResponse
-from app.routers import fixtures, predictions
+from app.routers import fixtures, predictions, ai_predictions
 from app.utils.config import settings, verify_env_variables
 from app.utils.logger import logger
 
@@ -86,6 +86,7 @@ async def ready_check():
 # Register routers
 app.include_router(fixtures.router, prefix="/fixtures", tags=["fixtures"])
 app.include_router(predictions.router, prefix="/predictions", tags=["predictions"])
+app.include_router(ai_predictions.router, prefix="/ai", tags=["ai-predictions"])
 
 
 # Startup event

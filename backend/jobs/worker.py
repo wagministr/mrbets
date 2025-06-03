@@ -269,5 +269,46 @@ async def main():
     logger.info("Worker shutdown complete")
 
 
+async def store_prediction_in_supabase(fixture_id: int, prediction: dict):
+    """Store AI prediction in Supabase ai_predictions table"""
+    try:
+        # Prepare data for storage according to new schema
+        prediction_data = {
+            "fixture_id": fixture_id,
+            "type": "ai_analysis",
+            "chain_of_thought": prediction.get("chain_of_thought", ""),
+            "final_prediction": prediction.get("final_prediction", ""),
+            "confidence_score": prediction.get("confidence_score", 0),
+            "risk_factors": prediction.get("risk_factors", []),
+            "key_insights": prediction.get("key_insights", []),
+            "context_quality": prediction.get("context_quality", {}),
+            "processing_time_seconds": prediction.get("processing_time_seconds", 0.0),
+            "context_chunks_used": prediction.get("context_chunks_used", 0),
+            "value_bets": prediction.get("value_bets", []),
+            "model_version": prediction.get("model_version", "unknown")
+            # generated_at will be set automatically by database default
+        }
+        
+        # Check if prediction already exists for this fixture
+        existing = supabase.table("ai_predictions").select("id").eq("fixture_id", fixture_id).execute()
+        
+        if existing.data:
+            # Update existing prediction
+            response = supabase.table("ai_predictions").update(prediction_data).eq("fixture_id", fixture_id).execute()
+            logger.info(f"Updated existing AI prediction for fixture {fixture_id} in Supabase")
+        else:
+            # Insert new prediction
+            response = supabase.table("ai_predictions").insert(prediction_data).execute()
+            logger.info(f"Inserted new AI prediction for fixture {fixture_id} in Supabase")
+        
+        if response.data:
+            logger.info(f"Successfully stored AI prediction for fixture {fixture_id} in Supabase")
+        else:
+            logger.error(f"Failed to store AI prediction for fixture {fixture_id}: {response}")
+            
+    except Exception as e:
+        logger.error(f"Error storing prediction in Supabase for fixture {fixture_id}: {e}", exc_info=True)
+
+
 if __name__ == "__main__":
     asyncio.run(main())

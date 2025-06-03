@@ -137,6 +137,19 @@ print(f"DEBUG: Logger initialized. OPENAI_API_KEY: {OPENAI_API_KEY is not None},
 # --- Константы для таймаутов ---
 DEFAULT_API_CALL_TIMEOUT = 60  # Общий таймаут для внешних вызовов в секундах, если не указан специфичный
 
+# Source reliability scores
+SOURCE_RELIABILITY = {
+    "api-football": 0.9,
+    "bbc": 0.8,
+    "espn": 0.75,  
+    "sky-sports": 0.75,
+    "twitter": 0.6,
+    "guardian": 0.8,
+    "telegraph": 0.75,
+    "rss-feed": 0.5,
+    # "youtube": 0.7,  # Removed - processed separately on dedicated hardware
+}
+
 class LLMContentAnalyzer:
     def __init__(self):
         print("DEBUG: LLMContentAnalyzer.__init__ - Constructor started") # Отладочный print
@@ -333,17 +346,7 @@ class LLMContentAnalyzer:
 
     def _get_reliability_score(self, source: str) -> float:
         """Возвращает оценку надежности источника на основе его типа."""
-        source_reliability_map = {
-            "bbc_sport": 0.9,
-            "espn": 0.85,
-            "api_football": 1.0,
-            "twitter": 0.6,
-            "telegram": 0.6,
-            "youtube": 0.7,
-            "reddit": 0.5,
-            "unknown_source": 0.5,
-        }
-        return source_reliability_map.get(source.lower(), 0.5)
+        return SOURCE_RELIABILITY.get(source.lower(), 0.5)
 
     async def _link_entity(self, entity_name: str, entity_type: str, event_id: str, context_team_ids: list[int] | None = None) -> int | None:
         logger.debug(f"Event {event_id}: Linking {entity_type} : {entity_name}")

@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # Redis для тестирования
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    networks:
+      - mrbets-net
+    command: ["redis-server", "--appendonly", "yes"]
+
+  # Backend с правильными DNS настройками
+  backend-test:
+    build: .
+    volumes:
+      - .:/app
+      - /app/logs  # Переопределяем logs как volume для логирования
+    working_dir: /app
+    environment:
+      - TWITTERAPI_IO_KEY=${TWITTERAPI_IO_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+    depends_on:
+      - redis
+    networks:
+      - mrbets-net
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 1.1.1.1
+      - 1.0.0.1
+    # Альтернативные DNS опции
+    extra_hosts:
+      - "api.twitterapi.io:104.26.2.33"  # Cloudflare IP как fallback
+    sysctls:
+      - net.ipv4.tcp_keepalive_time=120
+      - net.ipv4.tcp_keepalive_intvl=30
+      - net.ipv4.tcp_keepalive_probes=3
+    command: >
+      sh -c "
+        echo '🐳 Запуск диагностики Docker Network...' &&
+        echo 'Ожидание Redis...' &&
+        sleep 5 &&
+        echo '1. Тестирование базовой диагностики сети' &&
+        python3 test_docker_network.py &&
+        echo '' &&
+        echo '2. Тестирование Twitter Fetcher' &&
+        python3 test_twitter_fetcher.py &&
+        echo '' &&
+        echo '✅ Все тесты завершены!'
+      "
+
+  # Дополнительный контейнер для network troubleshooting
+  network-debug:
+    image: nicolaka/netshoot
+    networks:
+      - mrbets-net
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    command: >
+      sh -c "
+        echo '🔍 Network Debug Container запущен' &&
+        echo 'Доступные команды:' &&
+        echo '  docker compose exec network-debug ping google.com' &&
+        echo '  docker compose exec network-debug nslookup api.twitterapi.io' &&
+        echo '  docker compose exec network-debug curl -v https://api.twitterapi.io' &&
+        sleep 300
+      "
+
+networks:
+  mrbets-net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: mrbets-bridge
+      com.docker.network.driver.mtu: 1500
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16 
