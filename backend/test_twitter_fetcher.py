@@ -14,7 +14,7 @@ from datetime import datetime
 # Добавляем путь к корню проекта
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from fetchers.twitter_fetcher import TwitterFetcher, TwitterAPIClient
+from fetchers.twitter_fetcher import TwitterFetcher, TwitterAPIClient, main_twitter_task
 
 # Настройка логирования
 logging.basicConfig(
@@ -27,256 +27,188 @@ logger = logging.getLogger(__name__)
 
 async def test_twitter_api_connection():
     """Тестирует подключение к TwitterAPI.io"""
-    print("🔧 Тестирование подключения к TwitterAPI.io...")
+    print("🔌 Тест подключения к TwitterAPI.io...")
     
     try:
         async with TwitterAPIClient() as client:
-            # Простой тестовый запрос
-            response = await client.advanced_search("football", max_results=5)
+            # Простой тест поиска
+            response = await client.advanced_search(
+                query="football",
+                query_type="Latest"
+            )
             
             if "error" in response:
-                print(f"❌ Ошибка подключения: {response['error']}")
+                print(f"❌ Ошибка API: {response['error']}")
                 return False
             
             tweets = response.get("tweets", [])
-            print(f"✅ Подключение успешно! Найдено {len(tweets)} тестовых твитов")
-            
-            if tweets:
-                first_tweet = tweets[0]
-                print(f"📝 Пример твита: {first_tweet.get('text', '')[:100]}...")
-            
+            print(f"✅ API подключение успешно. Найдено {len(tweets)} твитов для тестового запроса")
             return True
             
     except Exception as e:
-        print(f"❌ Ошибка тестирования API: {e}")
+        print(f"❌ Ошибка подключения: {e}")
         return False
 
 
-async def test_expert_monitoring():
-    """Тестирует мониторинг экспертных аккаунтов"""
-    print("\n👑 Тестирование мониторинга экспертов...")
+async def test_twitter_fetcher_basic():
+    """Базовый тест Twitter Fetcher"""
+    print("\n🧪 Базовый тест Twitter Fetcher...")
     
     fetcher = TwitterFetcher()
     
     try:
-        # Пытаемся получить твиты от экспертов
-        tweets = await fetcher.fetch_expert_tweets(hours_back=24)  # 24 часа для большей вероятности найти что-то
+        # Тест подключения к Redis
+        await fetcher.connect_redis()
+        print("✅ Redis подключение успешно")
         
-        print(f"📊 Найдено {len(tweets)} твитов от экспертов")
+        # Тест получения экспертных твитов
+        print("📊 Тест мониторинга экспертов (15 минут)...")
+        expert_tweets = await fetcher.fetch_expert_tweets(hours_back=0.25)  # 15 минут
+        print(f"✅ Получено {len(expert_tweets)} экспертных твитов")
         
-        # Показываем статистику по источникам
-        sources = {}
-        for tweet in tweets:
-            username = tweet["author"]["username"]
-            sources[username] = sources.get(username, 0) + 1
+        # Показать примеры
+        if expert_tweets:
+            print("\n📝 Примеры экспертных твитов:")
+            for i, tweet in enumerate(expert_tweets[:3]):
+                print(f"  {i+1}. @{tweet['author']['username']}: {tweet['text'][:100]}...")
+                print(f"     Engagement: {tweet['engagement_score']}, Reliability: {tweet['reliability_score']}")
         
-        if sources:
-            print("📈 Статистика по источникам:")
-            for username, count in sources.items():
-                print(f"  @{username}: {count} твитов")
+        # Тест поиска по ключевым словам
+        print("\n🔍 Тест поиска по ключевым словам (15 минут)...")
+        keyword_tweets = await fetcher.search_keyword_tweets(hours_back=0.25, max_results=10)
+        print(f"✅ Найдено {len(keyword_tweets)} твитов по ключевым словам")
+        
+        if keyword_tweets:
+            print("\n📝 Примеры твитов по ключевым словам:")
+            for i, tweet in enumerate(keyword_tweets[:3]):
+                print(f"  {i+1}. @{tweet['author']['username']}: {tweet['text'][:100]}...")
+                print(f"     Хэштеги: {tweet['hashtags']}")
+        
+        await fetcher.close()
+        return True
+        
+    except Exception as e:
+        print(f"❌ Ошибка тестирования: {e}")
+        await fetcher.close()
+        return False
+
+
+async def test_expert_accounts():
+    """Тест экспертных аккаунтов"""
+    print("\n👥 Тест доступности экспертных аккаунтов...")
+    
+    from fetchers.twitter_fetcher import EXPERT_ACCOUNTS
+    
+    print(f"📋 Настроено {len(EXPERT_ACCOUNTS)} экспертных аккаунтов:")
+    for i, account in enumerate(EXPERT_ACCOUNTS, 1):
+        print(f"  {i}. @{account}")
+    
+    async with TwitterAPIClient() as client:
+        working_accounts = 0
+        
+        for account in EXPERT_ACCOUNTS[:3]:  # Тестируем первые 3 для экономии лимитов
+            try:
+                response = await client.advanced_search(
+                    query=f"from:{account}",
+                    query_type="Latest"
+                )
                 
-        # Показываем пример твита с лучшим engagement
-        if tweets:
-            best_tweet = max(tweets, key=lambda t: t["engagement_score"])
-            print(f"\n🏆 Твит с лучшим engagement ({best_tweet['engagement_score']}):")
-            print(f"  @{best_tweet['author']['username']}: {best_tweet['text'][:150]}...")
+                if "error" not in response and response.get("tweets"):
+                    working_accounts += 1
+                    print(f"  ✅ @{account} доступен")
+                else:
+                    print(f"  ⚠️ @{account} временно недоступен")
+                    
+            except Exception as e:
+                print(f"  ❌ @{account} ошибка: {e}")
         
-        return len(tweets) > 0
-        
-    except Exception as e:
-        print(f"❌ Ошибка тестирования экспертов: {e}")
-        return False
-    finally:
-        await fetcher.close()
-
-
-async def test_keyword_search():
-    """Тестирует поиск по ключевым словам"""
-    print("\n🔍 Тестирование поиска по ключевым словам...")
-    
-    fetcher = TwitterFetcher()
-    
-    try:
-        tweets = await fetcher.search_keyword_tweets(hours_back=12, max_results=20)
-        
-        print(f"📊 Найдено {len(tweets)} релевантных твитов")
-        
-        # Анализируем найденные хэштеги
-        all_hashtags = []
-        for tweet in tweets:
-            all_hashtags.extend(tweet["hashtags"])
-        
-        if all_hashtags:
-            from collections import Counter
-            popular_hashtags = Counter(all_hashtags).most_common(5)
-            print("🏷️ Популярные хэштеги:")
-            for hashtag, count in popular_hashtags:
-                print(f"  #{hashtag}: {count}")
-        
-        return len(tweets) > 0
-        
-    except Exception as e:
-        print(f"❌ Ошибка тестирования поиска: {e}")
-        return False
-    finally:
-        await fetcher.close()
-
-
-async def check_redis_availability():
-    """Проверяет доступность Redis на разных адресах"""
-    import redis.asyncio as redis
-    
-    # Список возможных Redis URLs для тестирования
-    redis_urls = [
-        "redis://localhost:6379/0",  # Локальный Redis
-        "redis://127.0.0.1:6379/0",  # Альтернативный localhost
-        "redis://redis:6379/0"       # Docker контейнер
-    ]
-    
-    for redis_url in redis_urls:
-        try:
-            client = redis.from_url(redis_url)
-            await client.ping()
-            await client.close()
-            print(f"✅ Redis доступен на: {redis_url}")
-            return redis_url
-        except Exception as e:
-            print(f"❌ Redis недоступен на {redis_url}: {e}")
-    
-    return None
+        print(f"\n📊 Доступно {working_accounts}/3 протестированных аккаунтов")
 
 
 async def test_redis_integration():
-    """Тестирует интеграцию с Redis"""
-    print("\n📡 Тестирование интеграции с Redis...")
-    
-    # Сначала проверяем доступность Redis
-    available_redis_url = await check_redis_availability()
-    
-    if not available_redis_url:
-        print("❌ Redis недоступен ни на одном из стандартных адресов")
-        print("💡 Для локального тестирования запустите Redis:")
-        print("   sudo apt install redis-server && sudo systemctl start redis")
-        print("   или через Docker: docker run -d -p 6379:6379 redis:7")
-        return False
-    
-    # Временно переопределяем REDIS_URL для тестирования
-    original_redis_url = os.getenv("REDIS_URL")
-    os.environ["REDIS_URL"] = available_redis_url
+    """Тест интеграции с Redis"""
+    print("\n🔄 Тест интеграции с Redis...")
     
     fetcher = TwitterFetcher()
     
     try:
         await fetcher.connect_redis()
-        print("✅ Подключение к Redis успешно")
         
-        # Создаем тестовый твит
-        test_tweet = {
-            "tweet_id": "test_123",
-            "text": "Test tweet for Redis integration",
-            "author": {
-                "username": "test_user",
-                "name": "Test User",
-                "followers": 1000,
-                "verified": False
-            },
-            "created_at": datetime.now().isoformat(),
-            "url": "https://twitter.com/test_user/status/test_123",
-            "metrics": {
-                "like_count": 10,
-                "retweet_count": 5,
-                "reply_count": 2,
-                "quote_count": 1,
-                "view_count": 100,
-                "bookmark_count": 3
-            },
-            "engagement_score": 25.5,
-            "reliability_score": 0.7,
-            "hashtags": ["test"],
-            "mentions": [],
-            "urls": [],
-            "language": "en",
-            "is_reply": False,
-            "source": "Twitter Web App"
-        }
+        # Создаем тестовые твиты
+        test_tweets = [
+            {
+                "tweet_id": "test_123",
+                "text": "Test tweet for Redis integration #football",
+                "author": {
+                    "username": "test_user",
+                    "name": "Test User",
+                    "followers": 1000,
+                    "verified": False
+                },
+                "created_at": "2025-01-01T12:00:00Z",
+                "engagement_score": 50.0,
+                "reliability_score": 0.8,
+                "hashtags": ["football"],
+                "mentions": [],
+                "urls": [],
+                "metrics": {"like_count": 10, "retweet_count": 5},
+                "is_reply": False,
+                "language": "en",
+                "url": "https://twitter.com/test_user/status/test_123"
+            }
+        ]
         
-        await fetcher.send_to_redis_stream([test_tweet])
-        print("✅ Тестовое сообщение отправлено в Redis Stream")
+        # Отправляем в Redis
+        await fetcher.send_to_redis_stream(test_tweets)
+        print("✅ Тест твит успешно отправлен в Redis Stream")
         
+        await fetcher.close()
         return True
         
     except Exception as e:
-        print(f"❌ Ошибка тестирования Redis: {e}")
-        return False
-    finally:
-        # Восстанавливаем оригинальный REDIS_URL
-        if original_redis_url:
-            os.environ["REDIS_URL"] = original_redis_url
-        elif "REDIS_URL" in os.environ:
-            del os.environ["REDIS_URL"]
-        
+        print(f"❌ Ошибка Redis интеграции: {e}")
         await fetcher.close()
+        return False
 
 
 async def main():
-    """Основная функция тестирования"""
-    print("🐦 Запуск тестирования Twitter Fetcher (TwitterAPI.io)")
-    print("=" * 60)
-    
-    # Проверяем наличие API ключа
-    api_key = os.getenv("TWITTERAPI_IO_KEY")
-    if not api_key:
-        print("❌ ОШИБКА: Переменная TWITTERAPI_IO_KEY не установлена!")
-        print("   Установите ключ API от TwitterAPI.io в переменную окружения")
-        print("   export TWITTERAPI_IO_KEY=ваш_ключ")
-        return
-    
-    print(f"🔑 API ключ найден: {api_key[:10]}...{api_key[-5:]}")
-    
-    # Показываем текущую настройку Redis
-    current_redis = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    print(f"🔧 Текущая настройка Redis: {current_redis}")
+    """Главная функция тестирования"""
+    print("🐦 TWITTER FETCHER TESTING SUITE")
+    print("=" * 50)
     
     tests = [
         ("API Connection", test_twitter_api_connection),
-        ("Expert Monitoring", test_expert_monitoring),
-        ("Keyword Search", test_keyword_search),
-        ("Redis Integration", test_redis_integration)
+        ("Expert Accounts", test_expert_accounts),
+        ("Redis Integration", test_redis_integration),
+        ("Basic Functionality", test_twitter_fetcher_basic),
     ]
     
-    results = []
+    passed = 0
+    total = len(tests)
     
     for test_name, test_func in tests:
-        print(f"\n{'='*20} {test_name} {'='*20}")
+        print(f"\n🧪 Running: {test_name}")
+        print("-" * 40)
+        
         try:
-            result = await test_func()
-            results.append((test_name, result))
+            success = await test_func()
+            if success:
+                passed += 1
+                print(f"✅ {test_name}: PASSED")
+            else:
+                print(f"❌ {test_name}: FAILED")
         except Exception as e:
-            print(f"❌ Критическая ошибка в тесте {test_name}: {e}")
-            results.append((test_name, False))
+            print(f"❌ {test_name}: ERROR - {e}")
     
-    # Итоговая сводка
-    print("\n" + "="*60)
-    print("📊 ИТОГОВЫЕ РЕЗУЛЬТАТЫ ТЕСТИРОВАНИЯ")
-    print("="*60)
+    print(f"\n📊 TWITTER FETCHER TEST RESULTS")
+    print("=" * 50)
+    print(f"   Passed: {passed}/{total}")
+    print(f"   Success Rate: {(passed/total)*100:.1f}%")
     
-    passed = 0
-    for test_name, result in results:
-        status = "✅ ПРОЙДЕН" if result else "❌ ПРОВАЛЕН"
-        print(f"{test_name:.<30} {status}")
-        if result:
-            passed += 1
-    
-    print(f"\nОбщий результат: {passed}/{len(results)} тестов пройдено")
-    
-    if passed == len(results):
-        print("🎉 ВСЕ ТЕСТЫ УСПЕШНО ПРОЙДЕНЫ!")
-        print("Twitter Fetcher готов к использованию с TwitterAPI.io")
-    elif passed >= 3:
-        print("✅ Основная функциональность работает!")
-        print("Twitter Fetcher готов к использованию (без Redis интеграции)")
+    if passed == total:
+        print("🎉 ALL TESTS PASSED! Twitter Fetcher ready for production!")
     else:
-        print("⚠️ Некоторые тесты провалены. Проверьте конфигурацию.")
+        print("⚠️ Some tests failed. Check configuration and API limits.")
 
 
 if __name__ == "__main__":

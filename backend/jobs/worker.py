@@ -23,13 +23,19 @@ import os
 import signal
 import sys
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 import redis
 from dotenv import load_dotenv
 
 # NEW IMPORT: Add scraper_fetcher
 from fetchers.scraper_fetcher import main_scraper_task as scraper_main_task
+# NEW IMPORT: Breaking news detector
+from processors.breaking_news_detector import BreakingNewsDetector
+# NEW IMPORT: Quick patch generator for impact analysis
+from processors.quick_patch_generator import QuickPatchGenerator
+# TODO: Add imports for other processors when ready
+# from processors.llm_content_analyzer import LLMContentAnalyzer
 
 # Set up logging
 logging.basicConfig(
@@ -53,7 +59,8 @@ except redis.ConnectionError as e:
     sys.exit(1)
 
 # Worker configuration
-FIXTURES_QUEUE = "queue:fixtures"
+FIXTURES_QUEUE = "queue:fixtures:normal"  # Normal queue for scheduled fixtures
+FIXTURES_PRIORITY_QUEUE = "queue:fixtures:priority"  # NEW: Priority queue
 RAW_EVENTS_STREAM = "stream:raw_events"
 CONSUMER_GROUP = "worker-group"
 CONSUMER_NAME = f"worker-{os.getpid()}"
@@ -93,6 +100,16 @@ def setup_streams():
     return True
 
 
+async def add_to_priority_queue(match_ids: List[int]):
+    """Add match IDs to priority queue for immediate processing"""
+    try:
+        for match_id in match_ids:
+            await asyncio.to_thread(redis_client.rpush, FIXTURES_PRIORITY_QUEUE, str(match_id))
+            logger.info(f"Added match {match_id} to priority queue for urgent processing")
+    except Exception as e:
+        logger.error(f"Error adding matches to priority queue: {e}")
+
+
 async def process_fixture(fixture_id_str: str):
     """Process a fixture from the queue by triggering scraper fetcher"""
     logger.info(f"Processing fixture: {fixture_id_str} - by triggering scraper_fetcher")
@@ -106,14 +123,20 @@ async def process_fixture(fixture_id_str: str):
                 logger.warning(f"Could not convert fixture_id_str '{fixture_id_str}' to int. Proceeding without specific fixture_id for scraper.")
 
         # Call the main task of scraper_fetcher, passing the specific fixture_id
-        logger.info(f"Calling scraper_fetcher for fixture_id: {current_fixture_id} (scraper will run its general scan but pass this ID)")
-        # Pass the integer fixture_id to the scraper task
-        await scraper_main_task(fixture_id=current_fixture_id)
+        logger.info(f"Calling scraper_fetcher for fixture_id: {current_fixture_id} (scraper will run its general scan)")
+        # scraper_main_task doesn't accept fixture_id parameter - it's a general scanner
+        await scraper_main_task()
         logger.info(f"scraper_fetcher task completed for fixture_id: {current_fixture_id}")
         
         # TODO: In the future, trigger other fetchers like rest_fetcher, odds_fetcher for this specific fixture_id
         # Example: await rest_fetcher.fetch_and_store_data(current_fixture_id)
         #          await odds_fetcher.fetch_and_store_data(current_fixture_id)
+
+        # TODO: Implement full prediction pipeline:
+        # 1. MatchContextRetriever().get_context_for_match(current_fixture_id)
+        # 2. LLMReasoner().generate_prediction(context)
+        # 3. Save prediction to Supabase
+        # 4. Trigger Telegram posting
 
         # Simulate some base processing time or await actual fetcher completion
         # The scraper_main_task is awaited, so its own delays are handled there.
@@ -125,56 +148,221 @@ async def process_fixture(fixture_id_str: str):
 
 
 async def process_raw_event(event_id, event_data):
-    """Process a raw event from the stream - placeholder implementation"""
+    """Process a raw event from the stream with breaking news detection"""
     try:
         logger.info(f"Processing raw event: {event_id}")
 
         # Parse event data
         match_id = event_data.get(b"match_id", b"").decode("utf-8")
         source = event_data.get(b"source", b"").decode("utf-8")
-        event_data.get(b"payload", b"").decode("utf-8")
+        payload = event_data.get(b"payload", b"").decode("utf-8")
 
         logger.info(f"Event data: match_id={match_id}, source={source}")
 
-        # Here we would process the event:
-        # 1. Translate if needed
-        # 2. Split into chunks
-        # 3. Calculate reliability score
-        # 4. Create embeddings
-        # 5. Store in Pinecone/Supabase
+        # Convert to dict format for processing
+        event_dict = {
+            "match_id": match_id if match_id else None,
+            "source": source,
+            "payload": payload,
+            "timestamp": datetime.utcnow().timestamp()
+        }
 
-        # Simulate processing delay
-        await asyncio.sleep(1)
+        # 1) Existing logic - LLM content analyzer (TODO: implement when ready)
+        # await llm_content_analyzer.process_event(event_dict)
+
+        # 2) NEW: Breaking news detection for Twitter content
+        if source == "twitter":
+            logger.info(f"Analyzing Twitter content for breaking news: {event_id}")
+            
+            breaking_detector = BreakingNewsDetector()
+            breaking_analysis = await breaking_detector.analyze_tweet(event_dict)
+            
+            logger.info(f"Breaking news analysis result: {breaking_analysis}")
+            
+            # If important news detected, trigger comprehensive impact analysis
+            if breaking_analysis["should_trigger_update"]:
+                affected_matches = breaking_analysis.get("affected_matches", [])
+                if affected_matches:
+                    logger.info(f"Breaking news detected! Adding {len(affected_matches)} matches to priority queue")
+                    await add_to_priority_queue(affected_matches)
+                    
+                    # TODO: Store breaking news in Supabase for future reference
+                    # await store_breaking_news(breaking_analysis, event_dict)
+                else:
+                    logger.info("Breaking news detected but no specific matches affected")
+                
+                # NEW: Quick Patch Generator - analyze impact on existing predictions
+                logger.info(f"🚀 Triggering Quick Patch analysis for breaking news (score: {breaking_analysis.get('importance_score', 0)})")
+                try:
+                    quick_patch = QuickPatchGenerator()
+                    patch_result = await quick_patch.process_breaking_news_impact(breaking_analysis, event_dict)
+                    logger.info(f"Quick patch result: {patch_result.get('status')} - {patch_result.get('updates_triggered', 0)} updates triggered")
+                except Exception as e:
+                    logger.error(f"Error in quick patch processing: {e}", exc_info=True)
+
+        # Process different event types based on source
+        # For backward compatibility, check both event_type and source
+        event_type = event_dict.get("event_type", "unknown")
+        source = event_dict.get("source", "")
+        
+        if event_type == "twitter_content" or source == "twitter":
+            await process_twitter_content_event(event_dict)
+        elif event_type == "scraper_content" or source in ["scraper", "bbc_sport"]:
+            await process_scraper_content_event(event_dict)
+        else:
+            logger.debug(f"Unknown event type: {event_type}, source: {source}, skipping LLM processing")
+
+        # Small delay to avoid overwhelming downstream services
+        await asyncio.sleep(0.1)
 
         return True
     except Exception as e:
-        logger.error(f"Error processing raw event {event_id}: {e}")
+        logger.error(f"Error processing raw event {event_id}: {e}", exc_info=True)
         return False
 
 
-async def consume_fixtures_queue():
-    """Consume fixtures from the Redis queue"""
+async def process_twitter_content_event(event_dict):
+    """Process Twitter content for storage in Pinecone"""
     try:
+        logger.info("Processing Twitter content for Pinecone storage")
+        
+        # Parse payload
+        payload_str = event_dict.get("payload", "{}")
+        payload = json.loads(payload_str) if payload_str else {}
+        
+        # Extract Twitter data in format expected by LLM Content Analyzer
+        tweet_data = {
+            "source": "twitter",
+            "url": payload.get("author_username", "") and f"https://twitter.com/{payload.get('author_username')}/status/{payload.get('tweet_id', '')}",
+            "title": f"Tweet by @{payload.get('author_username', 'unknown')}",
+            "full_text": payload.get("full_text", ""),
+            "article_timestamp_iso": payload.get("created_at", datetime.utcnow().isoformat()),
+            # Additional metadata for reference
+            "reliability_score": payload.get("reliability_score", 0.5),
+            "engagement_score": payload.get("engagement_score", 0),
+            "author_username": payload.get("author_username", ""),
+            "author_name": payload.get("author_name", ""),
+            "author_followers": payload.get("author_followers", 0),
+            "author_verified": payload.get("author_verified", False),
+            "hashtags": payload.get("hashtags", []),
+            "mentions": payload.get("mentions", []),
+            "metrics": payload.get("metrics", {}),
+            "is_reply": payload.get("is_reply", False)
+        }
+        
+        # Send to LLM Content Analyzer for processing and Pinecone storage
+        await send_to_llm_content_analyzer(tweet_data)
+        
+        logger.info(f"Twitter content sent to LLM Content Analyzer: @{payload.get('author_username', 'unknown')}")
+        
+    except Exception as e:
+        logger.error(f"Error processing Twitter content: {e}", exc_info=True)
+
+
+async def process_scraper_content_event(event_dict):
+    """Process scraper content for storage in Pinecone"""
+    try:
+        logger.info("Processing scraper content for Pinecone storage")
+        
+        # Parse payload
+        payload_str = event_dict.get("payload", "{}")
+        payload = json.loads(payload_str) if payload_str else {}
+        
+        # Extract scraper data in format expected by LLM Content Analyzer  
+        scraper_data = {
+            "source": payload.get("source", "scraper"),
+            "url": payload.get("url", ""),
+            "title": payload.get("title", ""),
+            "full_text": payload.get("full_text", ""),
+            "article_timestamp_iso": payload.get("published", datetime.utcnow().isoformat()),
+            # Additional metadata for reference
+            "reliability_score": 0.8,  # BBC Sport is generally reliable
+            "category": payload.get("category", ""),
+            "tags": payload.get("tags", []),
+            "word_count": len(payload.get("full_text", "").split()),
+            "summary": payload.get("summary", "")
+        }
+        
+        # Send to LLM Content Analyzer for processing and Pinecone storage
+        await send_to_llm_content_analyzer(scraper_data)
+        
+        logger.info(f"Scraper content sent to LLM Content Analyzer: {payload.get('title', 'unknown')}")
+        
+    except Exception as e:
+        logger.error(f"Error processing scraper content: {e}", exc_info=True)
+
+
+async def send_to_llm_content_analyzer(content_data):
+    """Send content to LLM Content Analyzer for processing and storage"""
+    try:
+        # Import LLM Content Analyzer here to avoid circular imports
+        from processors.llm_content_analyzer import LLMContentAnalyzer
+        
+        logger.debug(f"Sending content to LLM Content Analyzer: {content_data.get('document_title', 'unknown')}")
+        
+        # Create analyzer instance and process
+        analyzer = LLMContentAnalyzer()
+        
+        # Generate a unique event ID
+        import uuid
+        event_id = str(uuid.uuid4())
+        
+        # Call analyzer to handle LLM analysis, chunking, embeddings, and Pinecone storage
+        success = await analyzer.process_event_payload(event_id, content_data)
+        
+        if success:
+            logger.info(f"✅ Content successfully processed by LLM Content Analyzer")
+            return {"success": True, "event_id": event_id}
+        else:
+            logger.error(f"❌ LLM Content Analyzer failed to process content")
+            return {"success": False, "error": "Processing failed"}
+        
+    except Exception as e:
+        logger.error(f"Error sending to LLM Content Analyzer: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+async def consume_fixtures_queue():
+    """Consume fixtures from both priority and normal queues"""
+    try:
+        # First, check priority queue
+        logger.debug("Checking priority queue for urgent fixtures...")
+        priority_result = await asyncio.to_thread(redis_client.blpop, FIXTURES_PRIORITY_QUEUE, timeout=1)
+        
+        if priority_result:
+            _, fixture_id_bytes = priority_result
+            fixture_id = fixture_id_bytes.decode("utf-8")
+            logger.info(f"Got PRIORITY fixture {fixture_id} from queue '{FIXTURES_PRIORITY_QUEUE}'")
+            
+            # Process the priority fixture
+            success = await process_fixture(fixture_id)
+            
+            if not success:
+                logger.warning(f"Failed to process priority fixture {fixture_id}, requeuing...")
+                await asyncio.to_thread(redis_client.rpush, FIXTURES_PRIORITY_QUEUE, fixture_id)
+            
+            return True
+
+        # If no priority fixtures, check normal queue
         queue_length = await asyncio.to_thread(redis_client.llen, FIXTURES_QUEUE)
-        logger.info(f"Checking '{FIXTURES_QUEUE}', current length: {queue_length}") # DEBUG LOG
+        logger.debug(f"Checking normal queue '{FIXTURES_QUEUE}', current length: {queue_length}")
 
         if queue_length == 0:
             logger.debug(f"No fixtures in '{FIXTURES_QUEUE}'. Skipping pop attempt.")
             return False
 
-        # Get a fixture from the queue (blocking pop with timeout)
-        # redis-py's blpop is synchronous, so run it in a thread to avoid blocking asyncio loop
+        # Get a fixture from the normal queue (blocking pop with timeout)
         result = await asyncio.to_thread(redis_client.blpop, FIXTURES_QUEUE, timeout=1)
-        logger.info(f"blpop result from '{FIXTURES_QUEUE}': {result}") # DEBUG LOG
+        logger.debug(f"blpop result from '{FIXTURES_QUEUE}': {result}")
 
         if not result:
-            logger.info(f"'{FIXTURES_QUEUE}' blpop returned None (timeout or empty).") # DEBUG LOG
+            logger.debug(f"'{FIXTURES_QUEUE}' blpop returned None (timeout or empty).")
             return False
 
         _, fixture_id_bytes = result
         fixture_id = fixture_id_bytes.decode("utf-8")
 
-        logger.info(f"Got fixture {fixture_id} from queue '{FIXTURES_QUEUE}'")
+        logger.info(f"Got fixture {fixture_id} from normal queue '{FIXTURES_QUEUE}'")
 
         # Process the fixture
         success = await process_fixture(fixture_id)
@@ -186,7 +374,7 @@ async def consume_fixtures_queue():
 
         return True
     except Exception as e:
-        logger.error(f"Error consuming from fixtures queue '{FIXTURES_QUEUE}': {e}", exc_info=True)
+        logger.error(f"Error consuming from fixtures queues: {e}", exc_info=True)
         return False
 
 
@@ -229,34 +417,34 @@ async def consume_raw_events_stream():
 
 
 async def worker_loop():
-    """Main worker loop"""
-    logger.info("Worker loop started.") # DEBUG LOG
+    """Main worker loop with priority handling"""
+    logger.info("Worker loop started with priority queue support")
     while running:
         try:
-            logger.info("Worker loop iteration: trying to consume fixtures.") # DEBUG LOG
+            logger.debug("Worker loop iteration: trying to consume fixtures (priority first)...")
             fixtures_processed = await consume_fixtures_queue()
-            logger.info(f"Worker loop iteration: fixtures_processed = {fixtures_processed}") # DEBUG LOG
+            logger.debug(f"Worker loop iteration: fixtures_processed = {fixtures_processed}")
 
-            logger.info("Worker loop iteration: trying to consume raw events.") # DEBUG LOG
+            logger.debug("Worker loop iteration: trying to consume raw events...")
             events_processed = await consume_raw_events_stream()
-            logger.info(f"Worker loop iteration: events_processed = {events_processed}") # DEBUG LOG
+            logger.debug(f"Worker loop iteration: events_processed = {events_processed}")
 
             # If nothing was processed, sleep a bit to avoid CPU spinning
             if not fixtures_processed and not events_processed:
-                logger.info(f"Nothing processed, sleeping for {POLLING_INTERVAL} seconds.") # DEBUG LOG
+                logger.debug(f"Nothing processed, sleeping for {POLLING_INTERVAL} seconds...")
                 await asyncio.sleep(POLLING_INTERVAL)
             else:
-                logger.info("Something was processed, looping again immediately.") # DEBUG LOG
+                logger.debug("Something was processed, looping again immediately...")
                 await asyncio.sleep(0.1) # Short sleep to yield control
         except Exception as e:
             logger.error(f"Error in worker loop: {e}", exc_info=True)
             await asyncio.sleep(POLLING_INTERVAL)
-    logger.info("Worker loop stopped because 'running' is False.") # DEBUG LOG
+    logger.info("Worker loop stopped because 'running' is False.")
 
 
 async def main():
     """Main function"""
-    logger.info("Starting worker")
+    logger.info("Starting worker with breaking news detection")
 
     # Setup streams and consumer groups
     if not setup_streams():

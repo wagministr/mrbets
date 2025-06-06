@@ -82,7 +82,7 @@ logger.info(f"Supabase client initialized for URL: {SUPABASE_URL[:20]}...") # Lo
 
 # Configuration
 API_FOOTBALL_URL = "https://v3.football.api-sports.io"
-FIXTURES_QUEUE_NAME = "queue:fixtures" # Main queue for fixture IDs to be processed
+FIXTURES_QUEUE_NAME = "queue:fixtures:normal" # Normal queue for fixture IDs (priority queue is separate)
 PROCESSED_FIXTURES_SET_NAME = "set:fixtures_scanned_today" # For de-duplication by this scanner run
 # TTL for the de-duplication set, e.g., 24 hours in seconds
 PROCESSED_FIXTURES_SET_TTL = 24 * 60 * 60

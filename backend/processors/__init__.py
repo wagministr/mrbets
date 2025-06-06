@@ -12,10 +12,12 @@ This package contains modules for processing raw data:
 # Export new pipeline components
 from .retriever_builder import MatchContextRetriever
 from .llm_reasoner import LLMReasoner
-from .llm_content_analyzer import LLMContentAnalyzer
+# from .llm_content_analyzer import LLMContentAnalyzer  # Temporarily disabled for testing
+from .quick_patch_generator import QuickPatchGenerator
 
 __all__ = [
     "MatchContextRetriever",
     "LLMReasoner", 
-    "LLMContentAnalyzer"
+    # "LLMContentAnalyzer",  # Temporarily disabled for testing
+    "QuickPatchGenerator"
 ]
